@@ -17,7 +17,8 @@ app = FastAPI(title="CBI System")
 models.Base.metadata.create_all(bind=database.engine)
 
 # Get the directory where main.py is located and find templates
-BASE_DIR = Path(__file__).parent.parent
+# We're in /app/app/main.py, so we need to go up 2 levels to reach /app/
+BASE_DIR = Path(__file__).parent.parent.parent
 template_dir = BASE_DIR / "frontend" / "templates"
 templates = Jinja2Templates(directory=str(template_dir))
 
