@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 import os
 from datetime import datetime
 import pytz
@@ -146,9 +146,9 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
     ny_tz = pytz.timezone('America/New_York')
     current_time = datetime.now(ny_tz)
     
-    # Create submission
+    # Create submission - normalize ticker to handle case variations
     submission = models.Submission(
-        ticker=data["ticker"],
+        ticker=data["ticker"].strip(),  # Keep original case but strip whitespace
         username=data["username"],
         timestamp=current_time,
         down_target_multiple=data.get("down_target_multiple"),
@@ -163,11 +163,11 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(submission)
     
-    # Create KPIs
+    # Create KPIs - preserve original case for KPI names
     for kpi in data.get("kpis", []):
         kpi_record = models.KPI(
             submission_id=submission.id,
-            kpi_name=kpi["name"],
+            kpi_name=kpi["name"].strip(),  # Keep original case but strip whitespace
             down_value=kpi.get("down_value"),
             base_value=kpi.get("base_value"),
             up_value=kpi.get("up_value")
@@ -179,7 +179,7 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
     return {"success": True, "message": "Data submitted successfully", "submission_id": submission.id}
 
 # ====================================
-# NEW DELETE ENDPOINT
+# DELETE ENDPOINT
 # ====================================
 
 @app.delete("/submissions/{submission_id}")
@@ -224,17 +224,17 @@ async def delete_submission(submission_id: int, db: Session = Depends(get_db)):
 @app.get("/retrieve")
 async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Optional[str] = None, db: Session = Depends(get_db)):
     """
-    Retrieve the most recent data - FIXED with proper timezone handling
+    Retrieve the most recent data - CASE-INSENSITIVE with proper timezone handling
     """
     
-    # Clean inputs
-    ticker = ticker.strip()
-    scenario = scenario.lower().strip()
-    metric = metric.strip()
+    # Clean inputs and make case-insensitive
+    ticker_clean = ticker.strip()
+    scenario_clean = scenario.lower().strip()
+    metric_clean = metric.strip()
     
     # Validate scenario early
     valid_scenarios = ["down", "base", "up"]
-    if scenario not in valid_scenarios:
+    if scenario_clean not in valid_scenarios:
         raise HTTPException(status_code=400, detail=f"Invalid scenario: '{scenario}'")
     
     # Build query based on whether we have a date filter
@@ -254,9 +254,9 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
                 # If already timezone-aware, convert to NY
                 end_of_day = as_of_datetime.replace(hour=23, minute=59, second=59).astimezone(ny_tz)
             
-            # Query with date filter - use raw SQL ordering to be absolutely sure
+            # Query with date filter - CASE-INSENSITIVE ticker matching
             latest_submission = db.query(models.Submission).filter(
-                models.Submission.ticker == ticker,
+                func.lower(models.Submission.ticker) == ticker_clean.lower(),
                 models.Submission.timestamp <= end_of_day
             ).order_by(
                 models.Submission.id.desc()  # Use ID DESC as primary - highest ID = most recent insert
@@ -265,10 +265,9 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     else:
-        # No date filter - get absolutely most recent by ID (which correlates with insertion order)
-        # Using ID DESC ensures we get the truly latest regardless of timezone issues
+        # No date filter - get absolutely most recent by ID - CASE-INSENSITIVE ticker matching
         latest_submission = db.query(models.Submission).filter(
-            models.Submission.ticker == ticker
+            func.lower(models.Submission.ticker) == ticker_clean.lower()
         ).order_by(
             models.Submission.id.desc()  # Highest ID = most recent insertion
         ).first()
@@ -288,27 +287,30 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
     # Get the requested value
     value = None
     
-    if metric == "Target Multiple":
+    # Handle metric matching - case-insensitive for standard metrics
+    metric_lower = metric_clean.lower()
+    
+    if metric_lower == "target multiple":
         target_values = {
             "down": latest_submission.down_target_multiple,
             "base": latest_submission.base_target_multiple, 
             "up": latest_submission.up_target_multiple
         }
-        value = target_values[scenario]
+        value = target_values[scenario_clean]
         
-    elif metric == "Target Price":
+    elif metric_lower == "target price":
         price_values = {
             "down": latest_submission.down_target_price,
             "base": latest_submission.base_target_price,
             "up": latest_submission.up_target_price
         }
-        value = price_values[scenario]
+        value = price_values[scenario_clean]
         
     else:
-        # Handle KPIs
+        # Handle KPIs - case-insensitive matching
         kpi = db.query(models.KPI).filter(
             models.KPI.submission_id == latest_submission.id,
-            models.KPI.kpi_name == metric
+            func.lower(models.KPI.kpi_name) == metric_lower
         ).first()
         
         if not kpi:
@@ -328,7 +330,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
             "base": kpi.base_value,
             "up": kpi.up_value
         }
-        value = kpi_values[scenario]
+        value = kpi_values[scenario_clean]
     
     # Check if value exists and is not None
     if value is None:
@@ -340,22 +342,22 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
     # Return response with clear metadata
     return {
         "value": float(value),
-        "ticker": ticker,
-        "scenario": scenario, 
-        "metric": metric,
+        "ticker": latest_submission.ticker,  # Return original case from database
+        "scenario": scenario_clean, 
+        "metric": metric_clean,
         "submission_id": latest_submission.id,
         "timestamp": format_ny_time(latest_submission.timestamp),
         "username": latest_submission.username
     }
 
 # ====================================
-# ENDPOINTS FOR DOWNLOAD TEMPLATE
+# ENDPOINTS FOR DOWNLOAD RISK/REWARD TEMPLATE
 # ====================================
 
 @app.get("/tickers")
 async def get_available_tickers(db: Session = Depends(get_db)):
     """
-    Get all available tickers with metadata for Download Template feature
+    Get all available tickers with metadata for Download Risk/Reward feature
     Returns ticker info including last submission date, username, and KPI count
     """
     
@@ -406,13 +408,17 @@ async def get_available_tickers(db: Session = Depends(get_db)):
 async def get_kpis_for_ticker(ticker: str, db: Session = Depends(get_db)):
     """
     Get all KPI names for a specific ticker from its latest submission
-    Used by Download Template to populate KPI formulas
+    Used by Download Risk/Reward to populate KPI formulas
+    CASE-INSENSITIVE ticker matching
     """
     
     try:
-        # Get the latest submission for this ticker
+        # Clean ticker input
+        ticker_clean = ticker.strip()
+        
+        # Get the latest submission for this ticker - CASE-INSENSITIVE
         latest_submission = db.query(models.Submission).filter(
-            models.Submission.ticker == ticker
+            func.lower(models.Submission.ticker) == ticker_clean.lower()
         ).order_by(
             models.Submission.id.desc()
         ).first()
