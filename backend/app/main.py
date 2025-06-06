@@ -18,8 +18,10 @@ models.Base.metadata.create_all(bind=database.engine)
 # Templates setup
 templates = Jinja2Templates(directory="frontend/templates")
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+# Mount static files only if directory exists
+static_dir = "frontend/static"
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Dependency to get DB session
 def get_db():
