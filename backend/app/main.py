@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 import os
 from datetime import datetime
 import pytz
@@ -304,6 +304,91 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
         "timestamp": format_ny_time(latest_submission.timestamp),
         "username": latest_submission.username
     }
+
+# ====================================
+# NEW ENDPOINTS FOR DOWNLOAD TEMPLATE
+# ====================================
+
+@app.get("/tickers")
+async def get_available_tickers(db: Session = Depends(get_db)):
+    """
+    Get all available tickers with metadata for Download Template feature
+    Returns ticker info including last submission date, username, and KPI count
+    """
+    
+    # Get the latest submission for each ticker with aggregated info
+    latest_submissions = db.query(
+        models.Submission.ticker,
+        func.max(models.Submission.timestamp).label('last_submission'),
+        models.Submission.username,
+        models.Submission.id
+    ).group_by(
+        models.Submission.ticker
+    ).order_by(
+        func.max(models.Submission.timestamp).desc()
+    ).all()
+    
+    # Build ticker list with metadata
+    tickers = []
+    for submission_info in latest_submissions:
+        ticker = submission_info.ticker
+        last_submission = submission_info.last_submission
+        username = submission_info.username
+        
+        # Get the actual latest submission ID for this ticker
+        latest_sub = db.query(models.Submission).filter(
+            models.Submission.ticker == ticker
+        ).order_by(
+            models.Submission.id.desc()
+        ).first()
+        
+        # Count KPIs for this ticker's latest submission
+        kpi_count = db.query(models.KPI).filter(
+            models.KPI.submission_id == latest_sub.id
+        ).count()
+        
+        # Format the date for display
+        formatted_date = format_ny_time(last_submission).split(' ')[0]  # Just the date part
+        
+        ticker_info = {
+            "ticker": ticker,
+            "last_submission": formatted_date,
+            "username": latest_sub.username,  # Use username from latest submission
+            "kpi_count": kpi_count
+        }
+        tickers.append(ticker_info)
+    
+    return {"tickers": tickers}
+
+@app.get("/kpis")
+async def get_kpis_for_ticker(ticker: str, db: Session = Depends(get_db)):
+    """
+    Get all KPI names for a specific ticker from its latest submission
+    Used by Download Template to populate KPI formulas
+    """
+    
+    # Get the latest submission for this ticker
+    latest_submission = db.query(models.Submission).filter(
+        models.Submission.ticker == ticker
+    ).order_by(
+        models.Submission.id.desc()
+    ).first()
+    
+    if not latest_submission:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No submissions found for ticker: '{ticker}'"
+        )
+    
+    # Get all KPI names for this submission
+    kpi_names = db.query(models.KPI.kpi_name).filter(
+        models.KPI.submission_id == latest_submission.id
+    ).distinct().all()
+    
+    # Extract just the names
+    kpi_list = [kpi_name[0] for kpi_name in kpi_names]
+    
+    return {"kpis": kpi_list}
 
 if __name__ == "__main__":
     import uvicorn
