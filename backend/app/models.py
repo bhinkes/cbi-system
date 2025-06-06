@@ -1,6 +1,8 @@
 from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from datetime import datetime
+import pytz
 from .database import Base
 
 class Submission(Base):
@@ -9,7 +11,7 @@ class Submission(Base):
     id = Column(Integer, primary_key=True, index=True)
     ticker = Column(String(50), nullable=False)
     username = Column(String(100), nullable=False)
-    timestamp = Column(DateTime, server_default=func.now())
+    timestamp = Column(DateTime, default=lambda: datetime.now(pytz.timezone('America/New_York')))
     down_target_multiple = Column(Numeric(10, 4))
     base_target_multiple = Column(Numeric(10, 4))
     up_target_multiple = Column(Numeric(10, 4))

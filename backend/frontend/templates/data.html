@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CBI Financial Data System - Dashboard</title>
+    <title>CBI Financial Data System - All Data</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -15,25 +15,6 @@
         .card {
             border: none;
             border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }
-        .metric-card {
-            text-align: center;
-            padding: 2rem;
-        }
-        .metric-number {
-            font-size: 2.5rem;
-            font-weight: bold;
-            color: #007bff;
-        }
-        .metric-label {
-            color: #6c757d;
-            font-size: 1.1rem;
-        }
-        .table-container {
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
             box-shadow: 0 0 20px rgba(0,0,0,0.1);
         }
         .table th {
@@ -48,9 +29,6 @@
             text-align: center;
             vertical-align: middle;
             font-size: 0.9rem;
-        }
-        .table-responsive {
-            border-radius: 10px;
         }
         .scenario-group {
             background-color: #f8f9fa;
@@ -78,51 +56,23 @@
             <a class="navbar-brand" href="#">CBI Financial Data System</a>
             <div class="navbar-nav ms-auto">
                 <a class="nav-link" href="/dashboard">Dashboard</a>
-                <a class="nav-link" href="/data">All Data</a>
+                <a class="nav-link active" href="/data">All Data</a>
                 <a class="nav-link" href="/">Logout</a>
             </div>
         </div>
     </nav>
 
     <div class="container mt-4">
-        <!-- Summary Cards -->
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card metric-card">
-                    <div class="metric-number">{{ total_submissions }}</div>
-                    <div class="metric-label">Total Submissions</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card">
-                    <div class="metric-number">{{ unique_tickers }}</div>
-                    <div class="metric-label">Unique Tickers</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card">
-                    <div class="metric-number">{{ submissions|length }}</div>
-                    <div class="metric-label">Recent Submissions</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card">
-                    <div class="metric-number text-success">Active</div>
-                    <div class="metric-label">System Status</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Recent Submissions with All Metrics -->
         <div class="card">
             <div class="card-header">
-                <h5 class="card-title mb-0">Recent Submissions - Complete View</h5>
+                <h5 class="card-title mb-0">All Submissions - Complete Dataset</h5>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
                         <thead>
                             <tr>
+                                <th rowspan="2" style="vertical-align: middle;">ID</th>
                                 <th rowspan="2" style="vertical-align: middle;">Ticker</th>
                                 <th rowspan="2" style="vertical-align: middle;">User</th>
                                 <th rowspan="2" style="vertical-align: middle;">Timestamp<br><small>(NY Time)</small></th>
@@ -142,6 +92,7 @@
                         <tbody>
                             {% for submission in submissions %}
                             <tr>
+                                <td>{{ submission.id }}</td>
                                 <td class="ticker-name">{{ submission.ticker }}</td>
                                 <td>{{ submission.username }}</td>
                                 <td class="timestamp">{{ submission.timestamp }}</td>
@@ -154,19 +105,19 @@
                                 <td>
                                     {% if submission.kpis %}
                                         <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#kpis-{{ submission.id }}">
-                                            View {{ submission.kpis|length }} KPIs
+                                            {{ submission.kpis|length }} KPIs
                                         </button>
                                     {% else %}
-                                        <span class="text-muted">No KPIs</span>
+                                        <span class="text-muted">None</span>
                                     {% endif %}
                                 </td>
                             </tr>
                             {% if submission.kpis %}
                             <tr>
-                                <td colspan="10" class="p-0">
+                                <td colspan="11" class="p-0">
                                     <div class="collapse" id="kpis-{{ submission.id }}">
                                         <div class="kpi-section p-3">
-                                            <h6 class="mb-3">KPIs for {{ submission.ticker }}</h6>
+                                            <h6 class="mb-3">KPIs for {{ submission.ticker }} (ID: {{ submission.id }})</h6>
                                             <div class="table-responsive">
                                                 <table class="table table-sm table-bordered mb-0">
                                                     <thead>
@@ -197,33 +148,6 @@
                             {% endfor %}
                         </tbody>
                     </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- API Information -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="card-title mb-0">API Endpoints for Excel Integration</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <h6>Submit Data:</h6>
-                                <code>POST /submit</code>
-                            </div>
-                            <div class="col-md-6">
-                                <h6>Retrieve Data:</h6>
-                                <code>GET /retrieve?ticker=TICKER&scenario=SCENARIO&metric=METRIC</code>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <h6>Example:</h6>
-                            <code>/retrieve?ticker=MSFT%20US%20Equity&scenario=base&metric=Target%20Multiple</code>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>

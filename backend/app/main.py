@@ -3,8 +3,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 import os
 from datetime import datetime
+import pytz
 from typing import Optional, List
 import json
 from pathlib import Path
@@ -34,6 +36,15 @@ def get_db():
     finally:
         db.close()
 
+# Helper function to format timestamp to NY time
+def format_ny_time(timestamp):
+    if timestamp.tzinfo is None:
+        # If timestamp is naive, assume it's UTC and convert to NY
+        timestamp = pytz.UTC.localize(timestamp)
+    ny_tz = pytz.timezone('America/New_York')
+    ny_time = timestamp.astimezone(ny_tz)
+    return ny_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -48,17 +59,98 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, db: Session = Depends(get_db)):
-    submissions = db.query(models.Submission).order_by(models.Submission.timestamp.desc()).limit(10).all()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "submissions": submissions})
+    # Get all submissions with their KPIs, ordered by most recent
+    submissions = db.query(models.Submission).order_by(desc(models.Submission.timestamp)).limit(20).all()
+    
+    # Prepare enhanced data for dashboard
+    enhanced_submissions = []
+    for submission in submissions:
+        # Get all KPIs for this submission
+        kpis_dict = {}
+        for kpi in submission.kpis:
+            kpis_dict[kpi.kpi_name] = {
+                'down': float(kpi.down_value) if kpi.down_value else None,
+                'base': float(kpi.base_value) if kpi.base_value else None,
+                'up': float(kpi.up_value) if kpi.up_value else None
+            }
+        
+        # Format the submission data
+        enhanced_submission = {
+            'id': submission.id,
+            'ticker': submission.ticker,
+            'username': submission.username,
+            'timestamp': format_ny_time(submission.timestamp),
+            'down_target_multiple': float(submission.down_target_multiple) if submission.down_target_multiple else None,
+            'base_target_multiple': float(submission.base_target_multiple) if submission.base_target_multiple else None,
+            'up_target_multiple': float(submission.up_target_multiple) if submission.up_target_multiple else None,
+            'down_target_price': float(submission.down_target_price) if submission.down_target_price else None,
+            'base_target_price': float(submission.base_target_price) if submission.base_target_price else None,
+            'up_target_price': float(submission.up_target_price) if submission.up_target_price else None,
+            'kpis': kpis_dict
+        }
+        enhanced_submissions.append(enhanced_submission)
+    
+    # Get summary stats
+    total_submissions = db.query(models.Submission).count()
+    unique_tickers = db.query(models.Submission.ticker).distinct().count()
+    
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request, 
+        "submissions": enhanced_submissions,
+        "total_submissions": total_submissions,
+        "unique_tickers": unique_tickers
+    })
+
+@app.get("/data", response_class=HTMLResponse)
+async def data_view(request: Request, db: Session = Depends(get_db)):
+    # Get all submissions with full details
+    submissions = db.query(models.Submission).order_by(desc(models.Submission.timestamp)).all()
+    
+    # Prepare detailed data for data view
+    detailed_submissions = []
+    for submission in submissions:
+        # Get all KPIs for this submission
+        kpis_dict = {}
+        for kpi in submission.kpis:
+            kpis_dict[kpi.kpi_name] = {
+                'down': float(kpi.down_value) if kpi.down_value else None,
+                'base': float(kpi.base_value) if kpi.base_value else None,
+                'up': float(kpi.up_value) if kpi.up_value else None
+            }
+        
+        detailed_submission = {
+            'id': submission.id,
+            'ticker': submission.ticker,
+            'username': submission.username,
+            'timestamp': format_ny_time(submission.timestamp),
+            'down_target_multiple': float(submission.down_target_multiple) if submission.down_target_multiple else None,
+            'base_target_multiple': float(submission.base_target_multiple) if submission.base_target_multiple else None,
+            'up_target_multiple': float(submission.up_target_multiple) if submission.up_target_multiple else None,
+            'down_target_price': float(submission.down_target_price) if submission.down_target_price else None,
+            'base_target_price': float(submission.base_target_price) if submission.base_target_price else None,
+            'up_target_price': float(submission.up_target_price) if submission.up_target_price else None,
+            'kpis': kpis_dict
+        }
+        detailed_submissions.append(detailed_submission)
+    
+    return templates.TemplateResponse("data.html", {
+        "request": request, 
+        "submissions": detailed_submissions
+    })
 
 @app.post("/submit")
 async def submit_data(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     
+    # Get current NY time
+    ny_tz = pytz.timezone('America/New_York')
+    current_time = datetime.now(ny_tz)
+    
     # Create submission
     submission = models.Submission(
         ticker=data["ticker"],
         username=data["username"],
+        timestamp=current_time,
         down_target_multiple=data.get("down_target_multiple"),
         base_target_multiple=data.get("base_target_multiple"),
         up_target_multiple=data.get("up_target_multiple"),
@@ -91,7 +183,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = D
     # Get latest submission for ticker
     submission = db.query(models.Submission).filter(
         models.Submission.ticker == ticker
-    ).order_by(models.Submission.timestamp.desc()).first()
+    ).order_by(desc(models.Submission.timestamp)).first()
     
     if not submission:
         raise HTTPException(status_code=404, detail="No data found")
@@ -137,7 +229,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = D
     if value is None:
         raise HTTPException(status_code=404, detail="No data found")
     
-    return {"value": float(value), "timestamp": submission.timestamp}
+    return {"value": float(value), "timestamp": format_ny_time(submission.timestamp)}
 
 if __name__ == "__main__":
     import uvicorn
