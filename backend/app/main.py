@@ -181,7 +181,7 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
 @app.get("/retrieve")
 async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Optional[str] = None, db: Session = Depends(get_db)):
     """
-    Retrieve the most recent data - SIMPLIFIED approach
+    Retrieve the most recent data - FIXED with proper timezone handling
     """
     
     # Clean inputs
@@ -189,67 +189,78 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
     scenario = scenario.lower().strip()
     metric = metric.strip()
     
-    # Build query - SIMPLE approach
+    # Validate scenario early
+    valid_scenarios = ["down", "base", "up"]
+    if scenario not in valid_scenarios:
+        raise HTTPException(status_code=400, detail=f"Invalid scenario: '{scenario}'")
+    
+    # Build query based on whether we have a date filter
     if as_of_date:
         try:
-            # Parse date and create end of day timestamp
+            # Parse the as_of_date
             as_of_datetime = datetime.strptime(as_of_date, "%Y-%m-%d")
-            ny_tz = pytz.timezone('America/New_York')
-            end_of_day = ny_tz.localize(as_of_datetime.replace(hour=23, minute=59, second=59))
             
-            # Get most recent submission on or before the date
+            # Convert to NY timezone end of day
+            ny_tz = pytz.timezone('America/New_York')
+            
+            # Handle both timezone-aware and naive datetimes
+            if as_of_datetime.tzinfo is None:
+                # If naive, localize to NY timezone
+                end_of_day = ny_tz.localize(as_of_datetime.replace(hour=23, minute=59, second=59))
+            else:
+                # If already timezone-aware, convert to NY
+                end_of_day = as_of_datetime.replace(hour=23, minute=59, second=59).astimezone(ny_tz)
+            
+            # Query with date filter - use raw SQL ordering to be absolutely sure
             latest_submission = db.query(models.Submission).filter(
                 models.Submission.ticker == ticker,
                 models.Submission.timestamp <= end_of_day
             ).order_by(
-                models.Submission.timestamp.desc(),
-                models.Submission.id.desc()
+                models.Submission.id.desc()  # Use ID DESC as primary - highest ID = most recent insert
             ).first()
             
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     else:
-        # Get absolutely most recent submission for this ticker
+        # No date filter - get absolutely most recent by ID (which correlates with insertion order)
+        # Using ID DESC ensures we get the truly latest regardless of timezone issues
         latest_submission = db.query(models.Submission).filter(
             models.Submission.ticker == ticker
         ).order_by(
-            models.Submission.timestamp.desc(),
-            models.Submission.id.desc()
+            models.Submission.id.desc()  # Highest ID = most recent insertion
         ).first()
     
+    # Check if submission found
     if not latest_submission:
         # Get available tickers for error message
         all_tickers = db.query(models.Submission.ticker).distinct().all()
         available_tickers = [t[0] for t in all_tickers]
+        
+        date_msg = f" as of {as_of_date}" if as_of_date else ""
         raise HTTPException(
             status_code=404, 
-            detail=f"No data found for ticker: '{ticker}'. Available: {available_tickers}"
+            detail=f"No data found for ticker: '{ticker}'{date_msg}. Available tickers: {available_tickers}"
         )
     
-    # Validate scenario
-    valid_scenarios = ["down", "base", "up"]
-    if scenario not in valid_scenarios:
-        raise HTTPException(status_code=400, detail=f"Invalid scenario: '{scenario}'")
-    
-    # Get the value based on metric type
+    # Get the requested value
     value = None
     
     if metric == "Target Multiple":
-        if scenario == "down":
-            value = latest_submission.down_target_multiple
-        elif scenario == "base":
-            value = latest_submission.base_target_multiple
-        elif scenario == "up":
-            value = latest_submission.up_target_multiple
-            
+        target_values = {
+            "down": latest_submission.down_target_multiple,
+            "base": latest_submission.base_target_multiple, 
+            "up": latest_submission.up_target_multiple
+        }
+        value = target_values[scenario]
+        
     elif metric == "Target Price":
-        if scenario == "down":
-            value = latest_submission.down_target_price
-        elif scenario == "base":
-            value = latest_submission.base_target_price
-        elif scenario == "up":
-            value = latest_submission.up_target_price
-            
+        price_values = {
+            "down": latest_submission.down_target_price,
+            "base": latest_submission.base_target_price,
+            "up": latest_submission.up_target_price
+        }
+        value = price_values[scenario]
+        
     else:
         # Handle KPIs
         kpi = db.query(models.KPI).filter(
@@ -258,37 +269,40 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
         ).first()
         
         if not kpi:
-            # Get available KPIs
+            # Get all available KPIs for this submission
             available_kpis = db.query(models.KPI.kpi_name).filter(
                 models.KPI.submission_id == latest_submission.id
             ).distinct().all()
-            kpi_names = [kpi[0] for kpi in available_kpis]
+            kpi_names = [kpi_name[0] for kpi_name in available_kpis]
             
             raise HTTPException(
                 status_code=404, 
-                detail=f"KPI '{metric}' not found. Available: {kpi_names}"
+                detail=f"KPI '{metric}' not found for {ticker}. Available KPIs: {kpi_names}"
             )
         
-        if scenario == "down":
-            value = kpi.down_value
-        elif scenario == "base":
-            value = kpi.base_value
-        elif scenario == "up":
-            value = kpi.up_value
+        kpi_values = {
+            "down": kpi.down_value,
+            "base": kpi.base_value,
+            "up": kpi.up_value
+        }
+        value = kpi_values[scenario]
     
+    # Check if value exists and is not None
     if value is None:
         raise HTTPException(
             status_code=404, 
-            detail=f"No {scenario} value found for {metric} in submission {latest_submission.id}"
+            detail=f"No {scenario} value found for '{metric}' in latest submission (ID: {latest_submission.id}) for ticker '{ticker}'"
         )
     
+    # Return response with clear metadata
     return {
         "value": float(value),
         "ticker": ticker,
-        "scenario": scenario,
+        "scenario": scenario, 
         "metric": metric,
+        "submission_id": latest_submission.id,
         "timestamp": format_ny_time(latest_submission.timestamp),
-        "submission_id": latest_submission.id
+        "username": latest_submission.username
     }
 
 if __name__ == "__main__":
