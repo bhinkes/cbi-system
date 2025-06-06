@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from typing import Optional, List
 import json
+from pathlib import Path
 
 from . import models, database
 
@@ -15,13 +16,15 @@ app = FastAPI(title="CBI System")
 # Database setup
 models.Base.metadata.create_all(bind=database.engine)
 
-# Templates setup
-templates = Jinja2Templates(directory="frontend/templates")
+# Get the directory where main.py is located and find templates
+BASE_DIR = Path(__file__).parent.parent
+template_dir = BASE_DIR / "frontend" / "templates"
+templates = Jinja2Templates(directory=str(template_dir))
 
 # Mount static files only if directory exists
-static_dir = "frontend/static"
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+static_dir = BASE_DIR / "frontend" / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # Dependency to get DB session
 def get_db():
