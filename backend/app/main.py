@@ -179,14 +179,41 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
     return {"success": True, "message": "Data submitted successfully", "submission_id": submission.id}
 
 @app.get("/retrieve")
-async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = Depends(get_db)):
-    # Get latest submission for ticker
-    submission = db.query(models.Submission).filter(
-        models.Submission.ticker == ticker
-    ).order_by(desc(models.Submission.timestamp)).first()
+async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    Retrieve the latest data for a specific ticker, scenario, and metric.
+    
+    Parameters:
+    - ticker: Stock ticker (e.g., "MSFT US Equity")
+    - scenario: "down", "base", or "up"
+    - metric: "Target Multiple", "Target Price", or any KPI name
+    - as_of_date: Optional date filter (YYYY-MM-DD format)
+    """
+    
+    # Build query for latest submission
+    query = db.query(models.Submission).filter(models.Submission.ticker == ticker)
+    
+    # Add date filter if provided
+    if as_of_date:
+        try:
+            from datetime import datetime
+            date_filter = datetime.strptime(as_of_date, "%Y-%m-%d")
+            query = query.filter(models.Submission.timestamp <= date_filter)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    # Get the latest submission for this ticker
+    submission = query.order_by(desc(models.Submission.timestamp)).first()
     
     if not submission:
-        raise HTTPException(status_code=404, detail="No data found")
+        raise HTTPException(status_code=404, detail=f"No data found for ticker: {ticker}")
+    
+    # Validate scenario
+    valid_scenarios = ["down", "base", "up"]
+    if scenario.lower() not in valid_scenarios:
+        raise HTTPException(status_code=400, detail=f"Invalid scenario: {scenario}. Must be one of: {valid_scenarios}")
+    
+    scenario = scenario.lower()  # Normalize to lowercase
     
     # Handle target multiples and prices
     if metric == "Target Multiple":
@@ -196,8 +223,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = D
             value = submission.base_target_multiple
         elif scenario == "up":
             value = submission.up_target_multiple
-        else:
-            raise HTTPException(status_code=400, detail="Invalid scenario")
+            
     elif metric == "Target Price":
         if scenario == "down":
             value = submission.down_target_price
@@ -205,17 +231,25 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = D
             value = submission.base_target_price
         elif scenario == "up":
             value = submission.up_target_price
-        else:
-            raise HTTPException(status_code=400, detail="Invalid scenario")
+            
     else:
-        # Handle KPIs
+        # Handle KPIs - search for exact KPI name match
         kpi = db.query(models.KPI).filter(
             models.KPI.submission_id == submission.id,
             models.KPI.kpi_name == metric
         ).first()
         
         if not kpi:
-            raise HTTPException(status_code=404, detail="KPI not found")
+            # Get all available KPIs for this submission for error message
+            available_kpis = db.query(models.KPI.kpi_name).filter(
+                models.KPI.submission_id == submission.id
+            ).distinct().all()
+            kpi_names = [kpi[0] for kpi in available_kpis]
+            
+            raise HTTPException(
+                status_code=404, 
+                detail=f"KPI '{metric}' not found for {ticker}. Available KPIs: {kpi_names}"
+            )
         
         if scenario == "down":
             value = kpi.down_value
@@ -223,13 +257,23 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, db: Session = D
             value = kpi.base_value
         elif scenario == "up":
             value = kpi.up_value
-        else:
-            raise HTTPException(status_code=400, detail="Invalid scenario")
     
+    # Check if value exists
     if value is None:
-        raise HTTPException(status_code=404, detail="No data found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No {scenario} value found for {metric} in latest submission for {ticker}"
+        )
     
-    return {"value": float(value), "timestamp": format_ny_time(submission.timestamp)}
+    # Return the value with metadata
+    return {
+        "value": float(value),
+        "ticker": ticker,
+        "scenario": scenario,
+        "metric": metric,
+        "timestamp": format_ny_time(submission.timestamp),
+        "submission_id": submission.id
+    }
 
 if __name__ == "__main__":
     import uvicorn
