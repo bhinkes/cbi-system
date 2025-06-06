@@ -181,77 +181,59 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
 @app.get("/retrieve")
 async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Optional[str] = None, db: Session = Depends(get_db)):
     """
-    Retrieve the most recent data for a specific ticker, scenario, and metric.
-    
-    Parameters:
-    - ticker: Stock ticker (e.g., "AMZN US Equity")
-    - scenario: "down", "base", or "up"
-    - metric: "Target Multiple", "Target Price", or any KPI name
-    - as_of_date: Optional date filter (YYYY-MM-DD) - gets most recent AS OF that date
+    Retrieve the most recent data - SIMPLIFIED approach
     """
     
-    # Clean up inputs
+    # Clean inputs
     ticker = ticker.strip()
     scenario = scenario.lower().strip()
     metric = metric.strip()
     
-    # Build base query
-    query = db.query(models.Submission).filter(models.Submission.ticker == ticker)
-    
-    # Add date filter if provided - find most recent submission AS OF that date
+    # Build query - SIMPLE approach
     if as_of_date:
         try:
-            # Parse the as_of_date and set end of day
+            # Parse date and create end of day timestamp
             as_of_datetime = datetime.strptime(as_of_date, "%Y-%m-%d")
-            # Set to end of day (23:59:59) to include all submissions on that date
             ny_tz = pytz.timezone('America/New_York')
             end_of_day = ny_tz.localize(as_of_datetime.replace(hour=23, minute=59, second=59))
             
-            # Filter to submissions on or before the end of the specified date
-            query = query.filter(models.Submission.timestamp <= end_of_day)
+            # Get most recent submission on or before the date
+            latest_submission = db.query(models.Submission).filter(
+                models.Submission.ticker == ticker,
+                models.Submission.timestamp <= end_of_day
+            ).order_by(
+                models.Submission.timestamp.desc(),
+                models.Submission.id.desc()
+            ).first()
+            
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    
-    # Get the most recent submission by timestamp
-    # Using MAX function to be absolutely sure we get the latest timestamp
-    from sqlalchemy import func
-    
-    # First, get the maximum timestamp for this ticker (with date filter if provided)
-    max_timestamp_query = query.with_entities(func.max(models.Submission.timestamp))
-    max_timestamp = max_timestamp_query.scalar()
-    
-    if max_timestamp is None:
-        # No submissions found
-        all_tickers = db.query(models.Submission.ticker).distinct().all()
-        available_tickers = [t[0] for t in all_tickers]
-        
-        date_msg = f" as of {as_of_date}" if as_of_date else ""
-        raise HTTPException(
-            status_code=404, 
-            detail=f"No data found for ticker: '{ticker}'{date_msg}. Available tickers: {available_tickers}"
-        )
-    
-    # Now get the submission with that exact max timestamp
-    # If multiple submissions have same timestamp, get the one with highest ID (most recent insert)
-    latest_submission = query.filter(
-        models.Submission.timestamp == max_timestamp
-    ).order_by(models.Submission.id.desc()).first()
+    else:
+        # Get absolutely most recent submission for this ticker
+        latest_submission = db.query(models.Submission).filter(
+            models.Submission.ticker == ticker
+        ).order_by(
+            models.Submission.timestamp.desc(),
+            models.Submission.id.desc()
+        ).first()
     
     if not latest_submission:
-        raise HTTPException(status_code=500, detail="Database error: Could not retrieve latest submission")
+        # Get available tickers for error message
+        all_tickers = db.query(models.Submission.ticker).distinct().all()
+        available_tickers = [t[0] for t in all_tickers]
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No data found for ticker: '{ticker}'. Available: {available_tickers}"
+        )
     
     # Validate scenario
     valid_scenarios = ["down", "base", "up"]
     if scenario not in valid_scenarios:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid scenario: '{scenario}'. Must be one of: {valid_scenarios}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid scenario: '{scenario}'")
     
-    # Initialize value
+    # Get the value based on metric type
     value = None
     
-    # Handle target multiples and prices
     if metric == "Target Multiple":
         if scenario == "down":
             value = latest_submission.down_target_multiple
@@ -269,14 +251,14 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
             value = latest_submission.up_target_price
             
     else:
-        # Handle KPIs - search for exact KPI name match
+        # Handle KPIs
         kpi = db.query(models.KPI).filter(
             models.KPI.submission_id == latest_submission.id,
             models.KPI.kpi_name == metric
         ).first()
         
         if not kpi:
-            # Get all available KPIs for this submission
+            # Get available KPIs
             available_kpis = db.query(models.KPI.kpi_name).filter(
                 models.KPI.submission_id == latest_submission.id
             ).distinct().all()
@@ -284,7 +266,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
             
             raise HTTPException(
                 status_code=404, 
-                detail=f"KPI '{metric}' not found for {ticker}. Available KPIs for latest submission: {kpi_names}"
+                detail=f"KPI '{metric}' not found. Available: {kpi_names}"
             )
         
         if scenario == "down":
@@ -294,24 +276,19 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
         elif scenario == "up":
             value = kpi.up_value
     
-    # Check if value exists
     if value is None:
         raise HTTPException(
             status_code=404, 
-            detail=f"No {scenario} value found for {metric} in latest submission (ID: {latest_submission.id}, timestamp: {latest_submission.timestamp}) for {ticker}"
+            detail=f"No {scenario} value found for {metric} in submission {latest_submission.id}"
         )
     
-    # Return the value with comprehensive metadata
     return {
         "value": float(value),
         "ticker": ticker,
         "scenario": scenario,
         "metric": metric,
         "timestamp": format_ny_time(latest_submission.timestamp),
-        "submission_id": latest_submission.id,
-        "username": latest_submission.username,
-        "as_of_date_filter": as_of_date,
-        "debug_raw_timestamp": str(latest_submission.timestamp)
+        "submission_id": latest_submission.id
     }
 
 if __name__ == "__main__":
