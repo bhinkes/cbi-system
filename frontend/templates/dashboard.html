@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CBI System - Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>CBI Financial Data System</h1>
+            <div class="nav">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/">Logout</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">{{ submissions|length }}</div>
+                <div class="stat-label">Recent Submissions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">Active</div>
+                <div class="stat-label">System Status</div>
+            </div>
+        </div>
+        
+        <h2>Recent Submissions</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Username</th>
+                    <th>Timestamp</th>
+                    <th>Base Target Multiple</th>
+                    <th>Base Target Price</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for submission in submissions %}
+                <tr>
+                    <td>{{ submission.ticker }}</td>
+                    <td>{{ submission.username }}</td>
+                    <td>{{ submission.timestamp.strftime('%Y-%m-%d %H:%M') if submission.timestamp else 'N/A' }}</td>
+                    <td>{{ submission.base_target_multiple if submission.base_target_multiple else 'N/A' }}</td>
+                    <td>${{ submission.base_target_price if submission.base_target_price else 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 30px; padding: 20px; background: #e3f2fd; border-radius: 8px;">
+            <h3>API Endpoints for Excel Integration:</h3>
+            <p><strong>Submit Data:</strong> POST to <code>/submit</code></p>
+            <p><strong>Retrieve Data:</strong> GET <code>/retrieve?ticker=TICKER&scenario=SCENARIO&metric=METRIC</code></p>
+            <p><strong>Example:</strong> <code>/retrieve?ticker=MSFT%20US%20Equity&scenario=base&metric=Target%20Multiple</code></p>
+        </div>
+    </div>
+</body>
+</html>
