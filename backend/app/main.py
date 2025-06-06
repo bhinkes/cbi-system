@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -178,6 +178,49 @@ async def submit_data(request: Request, db: Session = Depends(get_db)):
     
     return {"success": True, "message": "Data submitted successfully", "submission_id": submission.id}
 
+# ====================================
+# NEW DELETE ENDPOINT
+# ====================================
+
+@app.delete("/submissions/{submission_id}")
+async def delete_submission(submission_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a submission and all its associated KPIs
+    """
+    try:
+        # Find the submission
+        submission = db.query(models.Submission).filter(models.Submission.id == submission_id).first()
+        
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission with ID {submission_id} not found")
+        
+        # Store info for response
+        ticker = submission.ticker
+        username = submission.username
+        timestamp = format_ny_time(submission.timestamp)
+        
+        # Delete the submission (KPIs will be deleted automatically due to cascade)
+        db.delete(submission)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Submission deleted successfully",
+            "deleted_submission": {
+                "id": submission_id,
+                "ticker": ticker,
+                "username": username,
+                "timestamp": timestamp
+            }
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting submission: {str(e)}")
+
 @app.get("/retrieve")
 async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Optional[str] = None, db: Session = Depends(get_db)):
     """
@@ -306,7 +349,7 @@ async def retrieve_data(ticker: str, scenario: str, metric: str, as_of_date: Opt
     }
 
 # ====================================
-# NEW ENDPOINTS FOR DOWNLOAD TEMPLATE - FIXED VERSION
+# ENDPOINTS FOR DOWNLOAD TEMPLATE
 # ====================================
 
 @app.get("/tickers")
